@@ -1,1 +1,551 @@
-# Oracle-TSBDTS
+# Semantic Code Search using Oracle AI Vector Search
+
+## Descriere generală
+
+Acest proiect implementează un sistem de căutare semantică pentru cod sursă Java, folosind Oracle AI Vector Search.
+
+Aplicația citește fișiere `.java`, extrage metodele, le salvează într-o bază de date Oracle și generează embeddings pentru fiecare metodă. Ulterior, utilizatorul poate introduce o întrebare în limbaj natural, iar sistemul returnează metodele cele mai relevante semantic.
+
+Căutarea nu se bazează pe potrivirea exactă a cuvintelor, ci pe similaritatea dintre vectori.
+
+Exemple de căutări:
+
+```text
+function for authenticate users
+change credentials for user
+compter les mots dans un texte
+```
+
+---
+
+## Problema abordată
+
+În proiectele software mari, găsirea rapidă a unei metode sau clase relevante poate deveni dificilă.
+
+Căutarea clasică funcționează pe baza potrivirii exacte de text. De exemplu, dacă utilizatorul caută `authenticate user`, o căutare simplă poate să nu găsească o metodă numită `login()` sau `validateCredentials()`, deși metoda respectivă are același scop.
+
+Problema abordată de acest proiect este lipsa unei metode de căutare care să înțeleagă sensul codului, nu doar cuvintele exacte.
+
+---
+
+## Ideea soluției
+
+Soluția folosește embeddings și Oracle AI Vector Search.
+
+Un embedding este o reprezentare numerică a unui text sau a unei bucăți de cod. Textele sau metodele cu sens asemănător vor avea vectori apropiați.
+
+Fluxul general al aplicației este:
+
+```text
+Fișiere Java
+    ↓
+Parsare cod sursă
+    ↓
+Extragere metode
+    ↓
+Salvare în Oracle Database
+    ↓
+Generare embeddings
+    ↓
+Salvare embeddings în coloană VECTOR
+    ↓
+Căutare semantică folosind VECTOR_DISTANCE
+```
+
+În acest proiect, embedding-urile sunt generate în Python folosind modelul `all-MiniLM-L12-v2` din biblioteca `sentence-transformers`.
+
+Oracle Database este folosit pentru:
+
+- stocarea metodelor extrase;
+- stocarea embedding-urilor într-o coloană de tip `VECTOR`;
+- compararea vectorilor folosind funcția `VECTOR_DISTANCE`;
+- returnarea celor mai relevante rezultate.
+
+---
+
+## Arhitectura soluției
+
+Arhitectura proiectului este formată din trei componente principale:
+
+```text
+Sample Java Project
+        ↓
+Java Application
+        ↓
+Oracle Database
+        ↓
+Python Embedding and Search Script
+```
+
+Componenta Java citește fișierele `.java`, extrage metodele folosind JavaParser și inserează datele în tabela `CODE_CHUNKS`.
+
+Oracle Database stochează metodele extrase și embedding-urile generate. Coloana `EMBEDDING` este de tip `VECTOR`, ceea ce permite folosirea funcțiilor specifice Oracle AI Vector Search.
+
+Scriptul Python generează embedding-uri pentru codul sursă, actualizează tabela Oracle și permite utilizatorului să introducă o întrebare. Întrebarea este transformată și ea într-un embedding, iar Oracle compară vectorul întrebării cu vectorii salvați în baza de date.
+
+---
+
+## Configurații software și hardware
+
+Pentru dezvoltarea proiectului au fost folosite următoarele tehnologii:
+
+- Oracle AI Database Free + SQL Plus -> version 23.26.0.0.0
+- Java JDK 21
+- Maven
+- JavaParser -> version 3.26.3
+- Python -> version 3.11.9
+- python-oracledb -> version 4.0.0
+- sentence-transformers -> version 5.4.1
+- PyTorch -> version 2.11.0
+- IntelliJ IDEA -> 24.2.3 Ultimate Edition
+
+Configurația Oracle folosită local:
+
+```text
+Host: localhost
+Port: 1521
+Service Name: FREEPDB1
+DSN: localhost:1521/FREEPDB1
+```
+
+Userul aplicației:
+
+```text
+vector_user
+```
+
+Parola folosită local:
+
+```text
+vector_password
+```
+
+---
+
+## Configurarea Oracle Database
+
+Pentru configurarea bazei de date am folosit SQL Plus.
+
+Inițial, m-am conectat cu userul administrativ `system`:
+
+```sql
+CONNECT system/oracle
+```
+
+Pentru a lucra în PDB-ul aplicației, am mutat sesiunea în `FREEPDB1`:
+
+```sql
+ALTER SESSION SET CONTAINER = FREEPDB1;
+```
+
+Pentru verificarea containerului curent, am folosit:
+
+```sql
+SHOW CON_NAME;
+```
+
+Rezultatul așteptat este:
+
+```text
+FREEPDB1
+```
+
+După mutarea sesiunii în `FREEPDB1`, am creat userul aplicației:
+
+```sql
+CREATE USER vector_user IDENTIFIED BY vector_password
+DEFAULT TABLESPACE USERS
+TEMPORARY TABLESPACE TEMP
+QUOTA UNLIMITED ON USERS;
+```
+
+Apoi am acordat userului drepturile necesare pentru conectare și creare de tabele:
+
+```sql
+GRANT CONNECT, RESOURCE TO vector_user;
+GRANT CREATE SESSION TO vector_user;
+GRANT CREATE TABLE TO vector_user;
+```
+
+După crearea userului, m-am conectat cu acesta:
+
+```sql
+CONNECT vector_user/vector_password@localhost:1521/FREEPDB1
+```
+
+Pentru a verifica userul curent, am folosit:
+
+```sql
+SHOW USER;
+```
+
+Rezultatul așteptat este:
+
+```text
+USER is "VECTOR_USER"
+```
+
+---
+
+## Modelul de date
+
+Tabela principală a proiectului este `CODE_CHUNKS`.
+
+Aceasta a fost creată cu următoarea comandă SQL:
+
+```sql
+CREATE TABLE code_chunks (
+    id NUMBER GENERATED BY DEFAULT AS IDENTITY PRIMARY KEY,
+    file_path VARCHAR2(500) NOT NULL,
+    package_name VARCHAR2(300),
+    class_name VARCHAR2(300),
+    symbol_name VARCHAR2(300) NOT NULL,
+    chunk_type VARCHAR2(50) NOT NULL,
+    source_code CLOB NOT NULL,
+    embedding VECTOR
+);
+```
+
+Descrierea coloanelor:
+
+| Coloană | Descriere |
+|---|---|
+| `id` | Identificator unic pentru fiecare fragment de cod |
+| `file_path` | Calea fișierului `.java` |
+| `package_name` | Numele pachetului Java |
+| `class_name` | Numele clasei |
+| `symbol_name` | Numele metodei, de forma `ClassName.methodName` |
+| `chunk_type` | Tipul fragmentului extras, de exemplu `METHOD` |
+| `source_code` | Codul sursă al metodei |
+| `embedding` | Vectorul numeric asociat metodei |
+
+Coloana `embedding` folosește tipul `VECTOR`, necesar pentru Oracle AI Vector Search.
+
+Pentru verificarea structurii tabelei, se poate folosi:
+
+```sql
+DESC code_chunks;
+```
+---
+
+## Popularea tabelei cu metode extrase din cod Java
+
+Aplicația Java parcurge fișierele `.java` din proiectul de test și extrage metodele.
+
+Exemplu de flux:
+
+```text
+UserService.java
+    ↓
+UserService.login
+UserService.registerUser
+UserService.resetPassword
+    ↓
+INSERT în CODE_CHUNKS
+```
+
+<img width="844" height="802" alt="image" src="https://github.com/user-attachments/assets/3d9b60d1-8461-484a-827b-fa6f38d1ca5d" />
+
+După rularea aplicației Java, tabela `CODE_CHUNKS` conține metodele extrase, dar coloana `EMBEDDING` este încă `NULL`.
+
+<img width="1640" height="522" alt="image" src="https://github.com/user-attachments/assets/77897d91-b649-479c-b201-c6d11e2fca44" />
+
+Pentru verificarea numărului de metode inserate:
+
+```sql
+SELECT COUNT(*) FROM code_chunks;
+```
+
+Pentru afișarea metodelor salvate:
+
+```sql
+SELECT id, class_name, symbol_name, chunk_type
+FROM code_chunks
+ORDER BY id;
+```
+---
+
+## Generarea embedding-urilor
+
+Embedding-urile sunt generate cu un script Python folosind biblioteca `sentence-transformers`.
+
+Modelul folosit este:
+
+```text
+all-MiniLM-L12-v2
+```
+
+Pentru instalarea dependențelor, am folosit următoarele comenzi:
+
+```bash
+python -m pip install sentence-transformers oracledb
+python -m pip install --upgrade torch
+```
+
+Scriptul se rulează cu:
+
+```bash
+python populate_embeddings.py
+```
+
+Scriptul Python citește metodele care au `EMBEDDING IS NULL`, generează embedding pentru codul sursă al fiecărei metode și actualizează tabela Oracle.
+
+<img width="1851" height="889" alt="image" src="https://github.com/user-attachments/assets/33c1ac7e-476f-4cd9-91bf-31a3fc8ba8a9" />
+
+Fragment relevant din script:
+
+```python
+embedding = model.encode(source_text)
+oracle_vector = vector_to_oracle_literal(embedding)
+
+cursor.execute(
+    update_sql,
+    {
+        "embedding": oracle_vector,
+        "id": row_id
+    }
+)
+```
+
+SQL-ul folosit pentru actualizare este:
+
+```sql
+UPDATE code_chunks
+SET embedding = TO_VECTOR(:embedding)
+WHERE id = :id
+```
+
+Funcția `TO_VECTOR` convertește embedding-ul generat în Python într-un vector compatibil cu Oracle Database.
+
+
+
+Pentru verificarea populării coloanei `EMBEDDING`, am folosit:
+
+```sql
+SELECT COUNT(*) FROM code_chunks;
+```
+
+și:
+
+```sql
+SELECT COUNT(*) FROM code_chunks
+WHERE embedding IS NOT NULL;
+```
+
+Dacă cele două valori sunt egale, toate metodele au embedding generat.
+
+<img width="1651" height="549" alt="image" src="https://github.com/user-attachments/assets/f38fcbc4-045e-4073-b8c8-38160a343536" />
+
+---
+
+## Căutarea semantică
+
+După generarea embedding-urilor, utilizatorul poate introduce o întrebare în limbaj natural.
+
+Exemple de întrebări:
+
+```text
+function for authenticate users
+change credentials for user
+compter les mots dans un texte
+```
+
+Scriptul Python generează embedding pentru întrebarea utilizatorului folosind același model `all-MiniLM-L12-v2`.
+
+Apoi vectorul întrebării este trimis către Oracle, unde este comparat cu vectorii salvați în tabela `CODE_CHUNKS`.
+
+Interogarea SQL folosită pentru căutare este:
+
+```sql
+SELECT
+    id,
+    file_path,
+    class_name,
+    symbol_name,
+    chunk_type,
+    ROUND(
+        VECTOR_DISTANCE(embedding, TO_VECTOR(:query_vector), COSINE),
+        4
+    ) AS distance,
+    DBMS_LOB.SUBSTR(source_code, 2000, 1) AS source_preview
+FROM code_chunks
+WHERE embedding IS NOT NULL
+ORDER BY VECTOR_DISTANCE(embedding, TO_VECTOR(:query_vector), COSINE)
+FETCH FIRST :top_k ROWS ONLY
+```
+
+Oracle execută compararea folosind funcția `VECTOR_DISTANCE`.
+
+Interpretarea rezultatului:
+
+```text
+distance mai mică = rezultat mai apropiat semantic
+distance mai mare = rezultat mai puțin relevant
+```
+
+Rezultatul căutării pentru "function for authenticate users"
+
+<img width="839" height="912" alt="image" src="https://github.com/user-attachments/assets/96d12f89-f1e6-49a5-96fd-44650fe41e62" />
+
+<img width="826" height="560" alt="image" src="https://github.com/user-attachments/assets/a77fb891-cfa3-4ead-8029-021c622ec311" />
+
+
+Rezultatul căutării pentru "change credentials for user"
+
+<img width="794" height="895" alt="image" src="https://github.com/user-attachments/assets/6f0005c5-4b9e-41a6-b239-23a2ac47d9f4" />
+
+<img width="800" height="614" alt="image" src="https://github.com/user-attachments/assets/e45c33da-8f36-47fa-8bba-647652cc6821" />
+
+
+Rezultatul căutării pentru "compter les mots dans un texte"
+
+<img width="818" height="868" alt="image" src="https://github.com/user-attachments/assets/8b50f13c-07d0-408a-8e87-06d12fb2da9e" />
+
+<img width="812" height="570" alt="image" src="https://github.com/user-attachments/assets/eeae7fff-671f-4631-ac1e-8a9ae156e8b2" />
+
+---
+
+## Interpretarea rezultatelor
+
+Căutarea semantică permite identificarea unor metode relevante chiar dacă termenii introduși de utilizator nu apar exact în numele metodei.
+
+Exemplu:
+
+```text
+Întrebare: function for authenticate users
+```
+
+Rezultat relevant:
+
+```text
+UserService.login
+```
+
+Interpretare: metoda `login` este apropiată semantic de ideea de autentificare a utilizatorului.
+
+Alt exemplu:
+
+```text
+Întrebare: change credentials for user
+```
+
+Rezultat relevant posibil:
+
+```text
+UserService.resetPassword
+```
+
+Interpretare: metoda care modifică parola utilizatorului este apropiată semantic de ideea de schimbare a datelor de autentificare.
+
+Alt exemplu:
+
+```text
+Întrebare: compter les mots dans un texte
+```
+
+Rezultat relevant:
+
+```text
+TextAnalyzer.countWords
+```
+
+Interpretare: chiar dacă întrebarea este în franceză, modelul de embeddings poate asocia cererea cu metoda care numără cuvintele dintr-un text.
+
+---
+
+## Observații despre folosirea Oracle AI Vector Search
+
+Inițial, a fost testată varianta de încărcare a unui model ONNX direct în Oracle folosind `DBMS_VECTOR.LOAD_ONNX_MODEL`.
+
+Pe instalarea locală Oracle pe Windows, această funcționalitate nu a fost disponibilă în configurația folosită. Din acest motiv, embedding-urile au fost generate în Python.
+
+Totuși, Oracle AI Vector Search este folosit în continuare pentru:
+
+- stocarea embedding-urilor în coloana `VECTOR`;
+- conversia vectorilor folosind `TO_VECTOR`;
+- compararea vectorilor folosind `VECTOR_DISTANCE`;
+- returnarea rezultatelor ordonate după distanță semantică.
+
+Arhitectura finală este:
+
+```text
+Python generează embeddings
+Oracle stochează vectorii
+Oracle compară vectorii cu VECTOR_DISTANCE
+```
+
+Astfel, compararea semantică este realizată de Oracle Database, iar Python este folosit pentru generarea vectorilor.
+
+---
+
+## Fragmente de cod relevante
+
+Funcția care transformă embedding-ul într-un format acceptat de Oracle:
+
+```python
+def vector_to_oracle_literal(vector) -> str:
+    return "[" + ",".join(f"{float(value):.8f}" for value in vector) + "]"
+```
+
+Generarea embedding-ului pentru o metodă:
+
+```python
+embedding = model.encode(source_text)
+oracle_vector = vector_to_oracle_literal(embedding)
+```
+
+Actualizarea embedding-ului în Oracle:
+
+```python
+cursor.execute(
+    update_sql,
+    {
+        "embedding": oracle_vector,
+        "id": row_id
+    }
+)
+```
+
+Generarea embedding-ului pentru întrebarea utilizatorului:
+
+```python
+question_embedding = model.encode(question)
+question_vector = vector_to_oracle_literal(question_embedding)
+```
+
+Căutarea semantică în Oracle:
+
+```sql
+ORDER BY VECTOR_DISTANCE(embedding, TO_VECTOR(:query_vector), COSINE)
+```
+
+---
+
+## Limitări
+
+Limitările proiectului sunt:
+
+- embedding-urile sunt generate în Python, nu direct în Oracle;
+- rezultatele depind de calitatea modelului `all-MiniLM-L12-v2`;
+- proiectul a fost testat pe un set redus de clase Java;
+- nu a fost implementată o interfață grafică;
+- nu a fost creat un index vectorial, deoarece volumul de date este mic.
+
+---
+
+## Referințe bibliografice
+
+1. Oracle Database Documentation - Vector Data Type  
+   [https://docs.oracle.com/en/database/oracle/oracle-database/23/vecse/vector-data-type.html](https://docs.oracle.com/en/database/oracle/oracle-database/26/nfcoa/vector-data-type.html)
+
+2. Oracle Database Documentation - VECTOR_DISTANCE  
+  [ https://docs.oracle.com/en/database/oracle/oracle-database/23/vecse/vector-distance-functions-and-operators.html](https://docs.oracle.com/en/database/oracle/oracle-database/26/sqlrf/vector_distance.html)
+
+3. python-oracledb Documentation  
+   [https://python-oracledb.readthedocs.io/](https://python-oracledb.readthedocs.io/en/latest/)
+
+4. Sentence Transformers Documentation  
+   [https://www.sbert.net/](https://sbert.net/)
+
+5. JavaParser Documentation  
+   [https://javaparser.org/](https://www.javadoc.io/doc/com.github.javaparser/javaparser-core/3.5.0/com/github/javaparser/JavaParser.html)
